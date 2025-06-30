@@ -18,48 +18,25 @@ from langchain.memory import ConversationBufferMemory
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, EmailStr
 
-# SQL
-from sqlalchemy import create_engine, text
-from urllib.parse import quote_plus
+# SQL and ORM
+import os
+import django
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'JOBMA_API.settings')  # change to your actual path
+django.setup()
+from interviewer_api.models import Candidate, InterviewInvitation, InterviewDetail
 
 # Code Starts from here --------------------------------------------->
 warnings.filterwarnings('ignore')
 load_dotenv()
 
-# SQL Connection
-@lru_cache(maxsize=1)
-def create_connection():
-    print("Creating Connection with DB")
-    try:
-        user = os.getenv("DB_USER")
-        raw_password = os.getenv("DB_PASSWORD")
-        password = quote_plus(raw_password)
-        host = os.getenv("DB_HOST")
-        port = os.getenv("DB_PORT")
-        db = os.getenv("DB_NAME")
-
-        # Credentials of mySQL connection
-        connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
-        engine = create_engine(connection_string)
-        print("Connection created Successfully")
-        return engine
-    except Exception as e:
-        print(f"Error creating connection with DB: {e}")
-        return None
-    
-# Initialize only once
-engine = create_connection()
-if not engine:
-    print("Database connection failed.")
-    exit()
-
 # Input Schema Using Pydantic
     # For Interview Scheduling
 class ScheduleInterviewInput(BaseModel):
-    role:str = Field(description="Target Job Role")
-    resume_path:str = Field(description="Path to resume file (PDF/DOCX/TXT)")
-    question_limit:int = Field(description="Number of interview questions to generate")
-    sender_email:EmailStr = Field(description="Sender's email address")
+    role:list = Field(description="Target Job Role")
+    resume_path:list = Field(description="Path to resume file (PDF/DOCX/TXT)")
+    question_limit:list = Field(description="Number of interview questions to generate")
+    sender_email:list = Field(description="Sender's email address")
 
     # For Tracking Candidate
 class TrackCandidateInput(BaseModel):
@@ -254,57 +231,30 @@ def schedule_interview(role:str|dict, resume_path:str, question_limit:int, sende
     phone = resume_result.get("Phone", "NA")
     current_time = datetime.now()
 
-    with engine.begin() as conn:  # Ensures transactional safety: commits on success, rolls back on error.
-        # 1. Check if candidate exists
-        result = conn.execute(text(
-            "Select id from AI_INTERVIEW_PLATFORM.candidates Where email = :email"
-        ),
-        {"email": email}
-        ).fetchone()
+    try:
+        candidate = Candidate.objects.get(email=email)
+    except Candidate.DoesNotExist:
+        candidate = Candidate.objects.create(
+            name=name,
+            email=email,
+            skills=skills,
+            education=education,
+            experience=experience,
+            resume_path=resume_path,
+            phone=phone,
+            created_at=current_time
+        )
 
-        if result:
-            candidate_id = result[0]
-        else:
-            # 2. Insert candidate
-            insert_candidate = text("""
-                Insert into AI_INTERVIEW_PLATFORM.candidates (name, email, skills, education, experience, resume_path, phone, created_at)
-                Values (:name, :email, :skills, :education, :experience, :resume_path, :phone, :created_at)
-            """)
-            conn.execute(insert_candidate, {
-                "name": name,
-                "email": email,
-                "skills": skills,
-                "education": education,
-                "experience": experience,
-                "resume_path": resume_path,
-                "phone": phone,
-                "created_at": current_time
-            })
 
-            # Get new candidate_id
-                # Scalar fetches the first column of the first row of the result set, or returns None if there are no rows.
-            candidate_id = conn.execute(
-                text("SELECT id FROM AI_INTERVIEW_PLATFORM.candidates WHERE email = :email"),
-                {"email": email}
-            ).scalar()
-
-        # 3. Insert interview_invitation
-        insert_invite = text("""
-            INSERT INTO AI_INTERVIEW_PLATFORM.interview_invitation 
-                (candidate_id, role, question_limit, sender_email, status, created_at, interview_scheduling_time)
-            VALUES 
-                (:candidate_id, :role, :question_limit, :sender_email, :status, :created_at, :interview_scheduling_time)
-            """)
-        
-        conn.execute(insert_invite, {
-            "candidate_id": candidate_id,
-            "role": role,
-            "question_limit": question_limit,
-            "sender_email": sender_email,
-            "status": "Scheduled",
-            "created_at": current_time,
-            "interview_scheduling_time": current_time
-        })
+    InterviewInvitation.objects.create(
+        candidate=candidate,
+        role=role,
+        question_limit=question_limit,
+        sender_email=sender_email,
+        status="Scheduled",
+        created_at=current_time,
+        interview_scheduling_time=current_time
+    )
 
     return f"Interview scheduled for '{name}' for role: {role}"
 
@@ -312,46 +262,18 @@ def schedule_interview(role:str|dict, resume_path:str, question_limit:int, sende
 def track_candidate(filter: TrackCandidateInput) -> Union[list[dict], str]: 
     """Flexible candidate tracker. Filter by name, email, role, date, and interview status."""
     try:
-        query = """
-            SELECT 
-                c.id AS candidate_id,
-                c.name AS name,
-                c.email AS email,
-                c.phone AS phone,
-
-                t.role AS role,
-                t.sender_email AS sender_email,
-                t.status AS status,
-                t.interview_scheduling_time AS interview_scheduling_time,
-
-                d.achieved_score AS achieved_score,
-                d.total_score AS total_score,
-                d.summary AS summary,
-                d.recommendation AS recommendation,
-                d.skills AS skills
-
-            FROM AI_INTERVIEW_PLATFORM.candidates c
-            LEFT JOIN AI_INTERVIEW_PLATFORM.interview_invitation t ON c.id = t.candidate_id
-            LEFT JOIN AI_INTERVIEW_PLATFORM.interview_details d ON t.id = d.invitation_id
-            WHERE 1=1
-        """
-        params = {}
-
+        queryset = InterviewInvitation.objects.select_related('candidate').prefetch_related('details')
         if filter.name:
-            query += " AND LOWER(c.name) LIKE :name"
-            params["name"] = f"%{filter.name.strip().lower()}%"
+                queryset = queryset.filter(candidate__name__icontains=filter.name.strip())
 
         if filter.email:
-                query += " AND c.email = :email"
-                params["email"] = filter.email.strip().lower()
+            queryset = queryset.filter(candidate__email=filter.email.strip().lower())
 
         if filter.role:
-            query += " AND LOWER(t.role) LIKE :role"
-            params["role"] = f"%{filter.role.lower()}%" 
+            queryset = queryset.filter(role__icontains=filter.role.strip())
 
         if filter.status:
-            query += " AND LOWER(t.status) = :status"
-            params["status"] = filter.status.lower()
+            queryset = queryset.filter(status__iexact=filter.status.strip())
 
         if filter.date_filter:
             today = datetime.today()
@@ -368,39 +290,42 @@ def track_candidate(filter: TrackCandidateInput) -> Union[list[dict], str]:
                 start = None
 
             if start:
-                query += " AND t.interview_scheduling_time BETWEEN :start AND :end"
-                params["start"] = start
-                params["end"] = end
-        
-        query += " ORDER BY c.created_at DESC"
+                queryset = queryset.filter(interview_scheduling_time__range=(start, end))
 
-        with engine.begin() as conn:
-            result = conn.execute(text(query), params).mappings().all()
+        queryset = queryset.order_by("-candidate__created_at")
 
-        if not result:
+        if not queryset.exists():
             return "No matching candidate records found."
-        return [dict(row) for row in result]
-    
+
+        result = []
+        for invite in queryset:
+            details = invite.details.first()  # Assuming OneToMany, get latest/first
+            result.append({
+                "candidate_id": invite.candidate.id,
+                "name": invite.candidate.name,
+                "email": invite.candidate.email,
+                "phone": invite.candidate.phone,
+                "role": invite.role,
+                "sender_email": invite.sender_email,
+                "status": invite.status,
+                "interview_scheduling_time": invite.interview_scheduling_time,
+                "achieved_score": getattr(details, 'achieved_score', None),
+                "total_score": getattr(details, 'total_score', None),
+                "summary": getattr(details, 'summary', None),
+                "recommendation": getattr(details, 'recommendation', None),
+                "skills": getattr(details, 'skills', None)
+            })
+
+        return result
+
     except Exception as e:
         return f"Error in tracking candidates: {str(e)}"
     
 # To check available roles
 def list_all_scheduled_roles() -> Union[list[str], str]:
     """Returns a list of all distinct roles for which interviews are scheduled."""
-    try:
-        query = """
-            SELECT DISTINCT role from AI_INTERVIEW_PLATFORM.interview_invitation
-            WHERE role is not NULL
-            Order by role
-        """
-        with engine.begin() as conn:
-            result = conn.execute(text(query)).scalars().all()
-
-        if not result:
-            return "No roles found with scheduled interviews."
-        return result
-    except Exception as e:
-        return f"Error fetching roles: {str(e)}"
+    roles = InterviewInvitation.objects.exclude(role__isnull=True).values_list('role', flat=True).distinct()
+    return list(roles)
 
 # Parsing part of Track Candidate
 def extract_filters(user_input:str) -> dict:
@@ -433,9 +358,9 @@ def extract_filters(user_input:str) -> dict:
 
     return parsing_result
 
-# Chatbot using Intent
-def ask_ai():
-    # Intent Prompt
+# Intent Classification
+def intent_detect(user_input:str):
+     # Intent Prompt
     intent_prompt = PromptTemplate(
         template="""You are an AI Intent Classifier for the Jobma Interviewing Platform. Based on the user input, identify their intent from the list of predefined intents.
 
@@ -453,15 +378,24 @@ def ask_ai():
     - **bye**: The user says goodbye or ends the conversation.
     - **irrelevant**: The user input is unrelated to the Jobma platform or job interviews, such as asking about food, weather, sports, or general unrelated queries (e.g., "I want to make a pizza").
 
-    Classify the following user input strictly as one of the intents above. Your response must be a **single word** from the list: `schedule_interview`, `greet`, `help`, `bye`, or `irrelevant`.
+    Classify the following user input strictly as one of the intents above. Your response must be a **single word** from the list: `schedule_interview`, `track_candidate`, `list_roles`, `greet`, `help`, `bye`, or `irrelevant`.
 
     User Input:
-    "{input}"
+    "{user_input}"
 
     Intent:
     """,
-        input_variables=['input']
+        input_variables=["user_input"]
     )
+
+    intent_chain = intent_prompt | llm | StrOutputParser()
+    intent = intent_chain.invoke({"user_input": user_input})
+    return intent.strip()
+
+
+
+# Chatbot using Intent
+def ask_ai():
 
     # Tools   
     interview_tool = StructuredTool.from_function(
@@ -480,7 +414,7 @@ def ask_ai():
     memory = ConversationBufferMemory(k=20, memory_key="chat_history", return_messages=True)
     parser = StrOutputParser()
     rag_chain = create_rag_chain("formatted_QA.txt", parser)
-    intent_chain = intent_prompt | llm | parser
+    
 
     tools = [interview_tool, status_tool]
     # Agent
@@ -498,7 +432,7 @@ def ask_ai():
         try:
             user_input = input("You: ")
 
-            response = intent_chain.invoke(user_input)
+            response = intent_detect(user_input)
 
             if response == 'bye':
                 print(f"{response}: Exiting Chat \nGoodbye!")
@@ -543,4 +477,6 @@ def ask_ai():
         except Exception as e:
             print(f"Error: {e}")
 
-ask_ai()
+# ask_ai()
+if __name__ == "__main__":
+    ask_ai()
