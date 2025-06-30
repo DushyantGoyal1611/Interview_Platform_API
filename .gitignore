@@ -14,3 +14,7 @@ env
 
 # Bot-Audio
 *.mp3
+
+# Folder
+Necessary_Documents
+Uploaded_Resumes

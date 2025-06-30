@@ -33,10 +33,10 @@ load_dotenv()
 # Input Schema Using Pydantic
     # For Interview Scheduling
 class ScheduleInterviewInput(BaseModel):
-    role:list = Field(description="Target Job Role")
-    resume_path:list = Field(description="Path to resume file (PDF/DOCX/TXT)")
-    question_limit:list = Field(description="Number of interview questions to generate")
-    sender_email:list = Field(description="Sender's email address")
+    role:str = Field(description="Target Job Role")
+    resume_path:str = Field(description="Path to resume file (PDF/DOCX/TXT)")
+    question_limit:int = Field(description="Number of interview questions to generate")
+    sender_email:EmailStr = Field(description="Sender's email address")
 
     # For Tracking Candidate
 class TrackCandidateInput(BaseModel):
@@ -233,6 +233,8 @@ def schedule_interview(role:str|dict, resume_path:str, question_limit:int, sende
 
     try:
         candidate = Candidate.objects.get(email=email)
+        candidate.resume_path = resume_path
+        candidate.save()
     except Candidate.DoesNotExist:
         candidate = Candidate.objects.create(
             name=name,
