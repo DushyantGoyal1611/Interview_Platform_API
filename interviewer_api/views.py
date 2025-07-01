@@ -1,82 +1,70 @@
+import requests
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.response import Response
 from rest_framework import status
-from Helper.interviewer_chatbot import schedule_interview, track_candidate, list_all_scheduled_roles, TrackCandidateInput, ScheduleInterviewInput
+from rest_framework.views import APIView
+from Helper.interviewer_chatbot import get_llm, schedule_interview, create_rag_chain, extract_filters, track_candidate, intent_detect, list_all_scheduled_roles, TrackCandidateInput, ScheduleInterviewInput
 from pydantic import ValidationError
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.core.files.storage import default_storage
-
-# # Schedule Interview
-# @api_view(["POST"])
-# def schedule_interview_view(request):
-#     try:
-#         validated_data = ScheduleInterviewInput(**request.data)
-
-#         resume = request.FILES.get('resume_path')
-#         print(resume)
-#         path = "../Uploaded_Resumes/"
-
-
-#         result = schedule_interview(
-#             validated_data.role,
-#             # validated_data.resume_path,
-#             validated_data.question_limit,
-#             validated_data.sender_email
-#         )
-#         return Response({"message": result}, status=status.HTTP_200_OK)
-#     except ValidationError as ve:
-#         return Response({"error": ve.errors()}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-#     except Exception as e:
-#         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+from django.core.files.storage import default_storage    
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
     
-    
-# Schedule Interview
-@api_view(["POST"])
-@parser_classes([MultiPartParser, FormParser])
-def schedule_interview_view(request):
-    try:
-        role = request.data.get("role", "NA")
-        resume_file = request.FILES.get("resume")
-        question_limit = int(request.data.get("question_limit", 5))
-        sender_email = request.data.get("sender_email", "NA")
 
-        if not all([role, question_limit, sender_email, resume_file]):
-            return Response({"error": "All fields including file are required"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Save uploaded file
-        resume_path = default_storage.save(f"Uploaded_Resumes/{resume_file.name}", resume_file)
-        resume_full_path = default_storage.path(resume_path)  # Absolute path for processing
+# Model
+llm = get_llm()
+parser = StrOutputParser()
 
-        result = schedule_interview(role, resume_full_path, question_limit, sender_email)
+# View of Chatbot
+class AskAIView(APIView):
+    parser_classes = [MultiPartParser, FormParser]  # Enable file uploads
+    def post(self, request):
+        try:
+            user_input = request.data.get('user_message', '')
+            if not user_input:
+                return Response({'error': 'No input provided'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            intent = intent_detect(user_input)
 
-        return Response({"message": result}, status=status.HTTP_200_OK)
+            if intent == 'greet':
+                greet_reponse = llm.invoke(user_input)
+                return Response({'response' : greet_reponse})
+            
+            elif intent == 'bye':
+                bye_reponse = llm.invoke(user_input)
+                return Response({'response' : bye_reponse})
+            
+            elif intent == 'help':
+                rag_chain = create_rag_chain("Necessary_Documents/formatted_QA.txt", parser)
+                rag_response = rag_chain.invoke(user_input)
+                return Response({'response': rag_response})
+            
+            elif intent == 'list_roles':
+                roles = list_all_scheduled_roles()
+                return Response({'response': roles})
+            
+            elif intent == 'track_candidate':
+                filters = extract_filters(user_input)
+                result = track_candidate(TrackCandidateInput(**filters))
+                return Response({"response":result})
+            
+            elif intent == 'schedule_interview':
+                role = request.data.get('role', 'NA')
+                resume_file = request.FILES.get('resume')
+                question_limit = int(request.data.get('question_limit', 5))
+                sender_email = request.data.get('sender_email', 'NA')
 
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                if not all([role, resume_file, sender_email]):
+                    return Response({"error": "All fields including file are required"}, status=status.HTTP_400_BAD_REQUEST)
+                
+                resume_path = default_storage.save(resume_file.name, resume_file)
+                resume_full_path = default_storage.path(resume_path)
+
+                result = schedule_interview(role, resume_full_path, question_limit, sender_email)
+                return Response({"response": result})
+            else:
+                return Response({'response': "I'm sorry, I can only help with interview-related queries."})
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# Track Candidate
-@api_view(["POST"])
-def track_candidate_view(request):
-    try:
-        filters = TrackCandidateInput(**request.data)
-        result = track_candidate(filters)
-        return Response({"data":result}, status=status.HTTP_200_OK)
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
-# List all Scheduled Interviews
-@api_view(["GET"])
-def list_scheduled_roles_view(request):
-    try:
-        roles = list_all_scheduled_roles()
-        
-        # If the function returns a string, it's likely an error message
-        if isinstance(roles, str):
-            return Response({"error": roles}, status=status.HTTP_404_NOT_FOUND)
-        
-        return Response({"roles": roles}, status=status.HTTP_200_OK)
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

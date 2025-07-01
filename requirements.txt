@@ -1,6 +1,7 @@
 # Django
 Django>=4.2,<5.0
 djangorestframework>=3.14,<4.0
+requests
 
 # Core LangChain
 langchain
