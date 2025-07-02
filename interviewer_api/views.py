@@ -1,17 +1,15 @@
-import requests
-from rest_framework.decorators import api_view, parser_classes
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
-from Helper.interviewer_chatbot import get_llm, schedule_interview, create_rag_chain, extract_filters, track_candidate, intent_detect, list_all_scheduled_roles, TrackCandidateInput, ScheduleInterviewInput
-from pydantic import ValidationError
+from Helper.interviewer_chatbot import get_llm, schedule_interview, create_rag_chain, extract_filters, track_candidate, intent_detect, list_all_scheduled_roles, TrackCandidateInput
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.core.files.storage import default_storage    
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_core.output_parsers import StrOutputParser
     
 
 # Model
 llm = get_llm()
+# Parser
 parser = StrOutputParser()
 
 # View of Chatbot

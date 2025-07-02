@@ -395,7 +395,6 @@ def intent_detect(user_input:str):
     return intent.strip()
 
 
-
 # Chatbot using Intent
 def ask_ai():
 
@@ -415,7 +414,7 @@ def ask_ai():
 
     memory = ConversationBufferMemory(k=20, memory_key="chat_history", return_messages=True)
     parser = StrOutputParser()
-    rag_chain = create_rag_chain("formatted_QA.txt", parser)
+    rag_chain = create_rag_chain("Necessary_Documents/formatted_QA.txt", parser)
     
 
     tools = [interview_tool, status_tool]
