@@ -19,7 +19,7 @@ class Candidate(models.Model):
         return self.name
     
 # Interview Invitation Table
-class InterviewInvitation(models.Model):
+class InterviewInvitation(models.Model):    
     STATUS_CHOICES = [
         ("Scheduled", "Scheduled"),
         ("Completed", "Completed")

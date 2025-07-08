@@ -1,6 +1,5 @@
 import json
 from rest_framework.response import Response
-from rest_framework import status
 from rest_framework.views import APIView
 from Helper.candidate_interview import get_llm, generate_next_question, generate_and_save_feedback
 from interviewer_api.models import Candidate, InterviewInvitation  
